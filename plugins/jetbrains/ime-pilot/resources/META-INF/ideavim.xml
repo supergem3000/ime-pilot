@@ -1,0 +1,1 @@
+<idea-plugin><extensions defaultExtensionNs="com.intellij"><applicationService serviceImplementation="local.imepilot.VimIntegration" preload="true"/><postStartupActivity implementation="local.imepilot.VimStartup"/></extensions></idea-plugin>

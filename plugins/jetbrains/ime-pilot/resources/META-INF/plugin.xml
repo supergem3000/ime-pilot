@@ -1,0 +1,12 @@
+<idea-plugin>
+  <id>local.imepilot.idea</id><name>ime-pilot</name><version>0.3.0</version><vendor>ime-pilot</vendor>
+  <description>Takes over IDEA input-method behavior and requests English on window activation and IdeaVim Insert leave. No Vim configuration edits or text collection.</description>
+  <idea-version since-build="261" until-build="261.*"/>
+  <depends>com.intellij.modules.platform</depends>
+  <depends optional="true" config-file="ideavim.xml">IdeaVIM</depends>
+  <extensions defaultExtensionNs="com.intellij">
+    <applicationService serviceImplementation="local.imepilot.PluginService" preload="true"/>
+    <statusBarWidgetFactory id="ime-pilot" implementation="local.imepilot.ConnectionWidgetFactory"/>
+  </extensions>
+  <actions><action id="ime-pilot.Status" class="local.imepilot.StatusAction" text="ime-pilot: Connection Status"><add-to-group group-id="ToolsMenu" anchor="last"/></action></actions>
+</idea-plugin>

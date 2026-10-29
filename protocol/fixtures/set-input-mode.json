@@ -1,0 +1,12 @@
+{
+  "requestId": "example-switch-1",
+  "method": "setInputMode",
+  "params": {
+    "sessionId": "example-session",
+    "targetMode": "english",
+    "target": {
+      "pid": 12345,
+      "windowId": "123456"
+    }
+  }
+}

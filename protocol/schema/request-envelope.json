@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ime-pilot plugin request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["requestId", "method", "params"],
+  "properties": {
+    "requestId": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"},
+    "method": {"enum": ["registerPlugin", "renewSession", "setInputMode", "unregisterPlugin"]},
+    "params": {"type": "object"}
+  }
+}
