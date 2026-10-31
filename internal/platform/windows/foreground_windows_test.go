@@ -1,6 +1,6 @@
 //go:build windows
 
-package winime
+package windows
 
 import (
 	"context"

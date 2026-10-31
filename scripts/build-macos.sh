@@ -36,6 +36,7 @@ fi
 
 app="$project_root/dist/ime-pilot.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+cp "$project_root/assets/icons/macos/ime-pilot.icns" "$app/Contents/Resources/ime-pilot.icns"
 "$go_command" build -mod=readonly -tags production -trimpath -o "$app/Contents/MacOS/ime-pilot" ./cmd/ime-pilot
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -43,8 +44,9 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <plist version="1.0"><dict>
     <key>CFBundleExecutable</key><string>ime-pilot</string>
     <key>CFBundleIdentifier</key><string>local.imepilot.desktop</string>
-    <key>CFBundleName</key><string>ime-pilot</string>
-    <key>CFBundleDisplayName</key><string>ime-pilot</string>
+    <key>CFBundleName</key><string>IME Pilot</string>
+    <key>CFBundleDisplayName</key><string>IME Pilot</string>
+    <key>CFBundleIconFile</key><string>ime-pilot.icns</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>CFBundleVersion</key><string>1</string>

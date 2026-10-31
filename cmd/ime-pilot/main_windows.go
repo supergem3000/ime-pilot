@@ -5,21 +5,21 @@ package main
 import (
 	"fmt"
 	"os"
-	"unsafe"
 
-	"golang.org/x/sys/windows"
-
-	"ime-pilot/internal/desktop"
+	"ime-pilot/internal/bootstrap"
 	"ime-pilot/internal/lifecycle"
+	native "ime-pilot/internal/platform/windows"
 )
 
 func main() {
+	// Duplicate-instance errors can show a dialog before Wails starts.
+	// Set DPI awareness first so these dialogs render at the monitor's scale.
+	if err := native.EnablePerMonitorDPI(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		text, _ := windows.UTF16PtrFromString(err.Error())
-		title, _ := windows.UTF16PtrFromString("ime-pilot")
-		_, _, _ = windows.NewLazySystemDLL("user32.dll").NewProc("MessageBoxW").Call(
-			0, uintptr(unsafe.Pointer(text)), uintptr(unsafe.Pointer(title)), 0x40)
+		_ = native.ShowMessage("IME Pilot", err.Error())
 	}
 }
 
@@ -29,5 +29,5 @@ func run() error {
 		return err
 	}
 	defer release()
-	return desktop.Run()
+	return bootstrap.Run()
 }

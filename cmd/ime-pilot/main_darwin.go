@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"ime-pilot/internal/desktop"
+	"ime-pilot/internal/bootstrap"
 	"ime-pilot/internal/lifecycle"
 )
 
@@ -23,5 +23,5 @@ func run() error {
 		return err
 	}
 	defer release()
-	return desktop.Run()
+	return bootstrap.Run()
 }

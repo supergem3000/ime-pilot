@@ -10,7 +10,7 @@ public final class StatusAction extends DumbAwareAction {
         Messages.showInfoMessage(
                 event.getProject(),
                 ClientState.summary() + "\n" + ClientState.detail(),
-                "ime-pilot"
+                "IME Pilot"
         );
     }
 }

@@ -4,13 +4,13 @@ package lifecycle
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
+
+	native "ime-pilot/internal/platform/darwin"
 )
 
-var ErrAlreadyRunning = errors.New("ime-pilot 已在运行，请从菜单栏打开")
+var ErrAlreadyRunning = errors.New("IME Pilot 已在运行，请从菜单栏打开")
 
 func DataDir() (string, error) {
 	base, err := os.UserConfigDir()
@@ -28,17 +28,9 @@ func AcquireInstance() (func(), error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "instance.lock"), os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return nil, err
+	release, err := native.LockFile(filepath.Join(dir, "instance.lock"))
+	if errors.Is(err, native.ErrLockHeld) {
+		return nil, ErrAlreadyRunning
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, ErrAlreadyRunning
-		}
-		return nil, fmt.Errorf("lock instance: %w", err)
-	}
-	// Keep the inode: unlinking it would let a second process lock a different file.
-	return func() { _ = f.Close() }, nil
+	return release, err
 }

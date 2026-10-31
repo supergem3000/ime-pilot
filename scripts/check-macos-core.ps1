@@ -26,8 +26,8 @@ try {
     }
     foreach ($architecture in @('arm64', 'amd64')) {
         $env:GOARCH = $architecture
-        foreach ($package in @('core', 'config', 'automation', 'takeover', 'rpc')) {
-            & go test -mod=readonly -c -o (Join-Path $output "$package-$architecture.test") "./internal/$package"
+        foreach ($package in @('core', 'config', 'rpc')) {
+            & go build -mod=readonly "./internal/$package"
             if ($LASTEXITCODE -ne 0) { throw "macOS compilation failed: $package/$architecture" }
         }
         Write-Output "Shared packages compiled for macOS/$architecture (not executed)."

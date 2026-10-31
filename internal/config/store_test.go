@@ -10,21 +10,17 @@ import (
 )
 
 func TestActivationModePersistenceAndValidation(t *testing.T) {
-	for _, mode := range []core.Mode{"", core.English, core.Chinese} {
+	for _, mode := range []core.Mode{core.English, core.Chinese} {
 		t.Run(string(mode), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")
 			s := Open(path)
 			c, _ := s.Snapshot()
-			c.Rules = []Rule{{AppPath: filepath.Join(t.TempDir(), "Editor.exe"), Name: "Editor", Enabled: true, TargetMode: mode}}
+			c.Rules = []core.Rule{{AppPath: filepath.Join(t.TempDir(), "Editor.exe"), Enabled: true, TargetMode: mode}}
 			if _, err := s.Save(c); err != nil {
 				t.Fatal(err)
 			}
 			loaded, err := Open(path).Snapshot()
-			want := mode
-			if want == "" {
-				want = core.English
-			}
-			if err != nil || loaded.Rules[0].ActivationMode() != want {
+			if err != nil || loaded.Rules[0].TargetMode != mode {
 				t.Fatalf("reload: %+v, %v", loaded, err)
 			}
 			c = loaded
@@ -44,7 +40,7 @@ func TestDurableRevisionPauseAndSnapshotIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Paused = true
-	c.Rules = []Rule{{AppPath: filepath.Join(t.TempDir(), "Editor.exe"), Name: "Editor", Enabled: true}}
+	c.Rules = []core.Rule{{AppPath: filepath.Join(t.TempDir(), "Editor.exe"), Enabled: true, TargetMode: core.English}}
 	next, err := s.Save(c)
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +53,7 @@ func TestDurableRevisionPauseAndSnapshotIsolation(t *testing.T) {
 	if err != nil || !reloaded.Paused || !reloaded.Rules[0].Enabled {
 		t.Fatalf("reload: %+v %v", reloaded, err)
 	}
-	if _, err = s.Save(c); !errors.Is(err, ErrConflict) {
+	if _, err = s.Save(c); !errors.Is(err, core.ErrConflict) {
 		t.Fatalf("stale edit accepted: %v", err)
 	}
 }
@@ -108,15 +104,16 @@ func TestCorruptConfigIsNotOverwritten(t *testing.T) {
 		t.Fatal("original lost")
 	}
 }
-func TestDuplicatePathsAndUnknownFieldsRejected(t *testing.T) {
+func TestDuplicatePathsRejectedAndUnknownFieldsIgnored(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "Editor.exe")
-	c := Config{SchemaVersion: 2, Revision: 1, Rules: []Rule{{AppPath: path, Name: "A"}, {AppPath: path, Name: "B"}}}
-	if Validate(c) == nil {
+	c := core.Config{SchemaVersion: 2, Revision: 1, Rules: []core.Rule{{AppPath: path, TargetMode: core.English}, {AppPath: path, TargetMode: core.English}}}
+	if core.Validate(c) == nil {
 		t.Fatal("duplicate application accepted")
 	}
 	p := filepath.Join(t.TempDir(), "config.json")
 	os.WriteFile(p, []byte(`{"schemaVersion":2,"revision":1,"paused":false,"rules":[],"unknown":true}`), 0600)
-	if _, err := Open(p).Snapshot(); err == nil {
-		t.Fatal("unknown field silently accepted")
+	loaded, err := Open(p).Snapshot()
+	if err != nil || loaded.Revision != 1 || loaded.Paused {
+		t.Fatalf("unknown field prevented loading known fields: config=%+v err=%v", loaded, err)
 	}
 }

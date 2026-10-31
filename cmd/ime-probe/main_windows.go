@@ -12,7 +12,7 @@ import (
 	"os"
 	"time"
 
-	winime "ime-pilot/internal/platform/windows"
+	winime "ime-pilot/internal/schemes/windowsimm"
 )
 
 func main() {

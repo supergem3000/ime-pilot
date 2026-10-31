@@ -1,70 +1,34 @@
-// Package config owns the user's application rules and durable pause state.
+// Package config persists core configuration with atomic replacement.
 package config
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
+
 	"sync"
 
 	"ime-pilot/internal/core"
-	"ime-pilot/internal/takeover"
 )
-
-type Rule struct {
-	BundleID            string    `json:"bundleId,omitempty"`
-	AppPath             string    `json:"appPath"`
-	Name                string    `json:"name"`
-	Enabled             bool      `json:"enabled"`
-	SwitchOnActivation  *bool     `json:"switchOnActivation,omitempty"`
-	TargetMode          core.Mode `json:"targetMode,omitempty"`
-	SwitchOnInsertLeave *bool     `json:"switchOnInsertLeave,omitempty"`
-}
-
-func (r Rule) Identity() takeover.Identity {
-	return takeover.Identity{Path: r.AppPath, BundleID: r.BundleID}
-}
-
-func (r Rule) OnActivation() bool  { return r.SwitchOnActivation == nil || *r.SwitchOnActivation }
-func (r Rule) OnInsertLeave() bool { return r.SwitchOnInsertLeave == nil || *r.SwitchOnInsertLeave }
-
-// ActivationMode preserves English as the default for rules saved without a mode.
-func (r Rule) ActivationMode() core.Mode {
-	if r.TargetMode == "" {
-		return core.English
-	}
-	return r.TargetMode
-}
-
-type Config struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	Revision      uint64 `json:"revision"`
-	Paused        bool   `json:"paused"`
-	Rules         []Rule `json:"rules"`
-	MacOS         MacOS  `json:"macos,omitempty"`
-}
-
-type MacOS struct {
-	ChineseSourceID string `json:"chineseSourceId,omitempty"`
-	EnglishSourceID string `json:"englishSourceId,omitempty"`
-}
-
-var ErrConflict = errors.New("配置已被其他操作更新，请重新加载后保存")
 
 type Store struct {
 	mu      sync.Mutex
 	path    string
-	current Config
+	current core.Config
 	loadErr error
 }
 
 func Open(path string) *Store {
-	s := &Store{path: path, current: Config{SchemaVersion: 2, Revision: 1, Rules: []Rule{}}}
+	return OpenWithDefaults(path, core.Config{SchemaVersion: 2, Revision: 1, Rules: []core.Rule{}})
+}
+
+// Defaults apply only when no file exists. JSON fields not defined in Config
+// are ignored; existing files are not migrated or filled with defaults.
+func OpenWithDefaults(path string, defaults core.Config) *Store {
+	s := &Store{path: path, current: clone(defaults)}
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s
@@ -77,19 +41,11 @@ func Open(path string) *Store {
 	if err == nil && len(data) > 256*1024 {
 		err = errors.New("配置文件超过 256 KiB")
 	}
-	var c Config
+	var c core.Config
 	if err == nil {
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		decoder.DisallowUnknownFields()
-		err = decoder.Decode(&c)
+		err = json.Unmarshal(data, &c)
 		if err == nil {
-			var extra any
-			if decoder.Decode(&extra) != io.EOF {
-				err = errors.New("配置有多余内容")
-			}
-		}
-		if err == nil {
-			err = Validate(c)
+			err = core.Validate(c)
 		}
 	}
 	if err != nil {
@@ -101,52 +57,12 @@ func Open(path string) *Store {
 	return s
 }
 
-func Validate(c Config) error {
-	if c.SchemaVersion != 2 || c.Revision == 0 {
-		return errors.New("配置版本无效")
-	}
-	if len(c.Rules) > 128 {
-		return errors.New("应用规则最多 128 条")
-	}
-	for _, id := range []string{c.MacOS.ChineseSourceID, c.MacOS.EnglishSourceID} {
-		if len(id) > 512 || strings.TrimSpace(id) != id || strings.ContainsRune(id, 0) {
-			return errors.New("输入源标识无效")
-		}
-	}
-	if c.MacOS.ChineseSourceID != "" && c.MacOS.ChineseSourceID == c.MacOS.EnglishSourceID {
-		return errors.New("中文和英文不能使用同一个输入源")
-	}
-	seen := map[string]bool{}
-	for _, r := range c.Rules {
-		if mode := r.ActivationMode(); mode != core.English && mode != core.Chinese {
-			return errors.New("进入应用的目标模式必须为中文或英文")
-		}
-		if r.BundleID != "" {
-			if r.AppPath != "" || !takeover.ValidBundleID(r.BundleID) {
-				return errors.New("macOS 应用规则必须仅使用有效 Bundle ID")
-			}
-		} else if r.AppPath != strings.TrimSpace(r.AppPath) || !filepath.IsAbs(r.AppPath) || !strings.EqualFold(filepath.Ext(r.AppPath), ".exe") || strings.ContainsRune(r.AppPath, 0) {
-			return errors.New("应用路径必须为绝对 .exe 路径")
-		}
-		if len(r.AppPath) > 32768 || len(r.Name) > 160 || strings.TrimSpace(r.Name) == "" {
-			return errors.New("应用名称或路径长度无效")
-		}
-		key := r.Identity().Key()
-		if seen[key] {
-			return errors.New("不能重复添加同一应用")
-		}
-		seen[key] = true
-	}
-	return nil
+func clone(c core.Config) core.Config {
+	c.Rules = append([]core.Rule{}, c.Rules...)
+	c.SchemeConfig = append([]byte(nil), c.SchemeConfig...)
+	return c
 }
-func Key(path string) string {
-	if path == "" {
-		return ""
-	}
-	return strings.ToLower(filepath.Clean(path))
-}
-func clone(c Config) Config { c.Rules = append([]Rule{}, c.Rules...); return c }
-func (s *Store) Snapshot() (Config, error) {
+func (s *Store) Snapshot() (core.Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return clone(s.current), s.loadErr
@@ -154,19 +70,19 @@ func (s *Store) Snapshot() (Config, error) {
 func (s *Store) Path() string { return s.path }
 
 // Save publishes the new revision only after durable replacement succeeds.
-func (s *Store) Save(c Config) (Config, error) {
+func (s *Store) Save(c core.Config) (core.Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.loadErr != nil {
 		return clone(s.current), s.loadErr
 	}
 	if c.Revision != s.current.Revision {
-		return clone(s.current), ErrConflict
+		return clone(s.current), core.ErrConflict
 	}
 	if c.Revision == ^uint64(0) {
 		return clone(s.current), errors.New("配置版本号已达到上限")
 	}
-	if err := Validate(c); err != nil {
+	if err := core.Validate(c); err != nil {
 		return clone(s.current), err
 	}
 	c = clone(c)

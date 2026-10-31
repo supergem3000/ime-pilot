@@ -14,26 +14,24 @@ import (
 	"testing"
 	"time"
 
-	"ime-pilot/internal/automation"
-	"ime-pilot/internal/config"
 	"ime-pilot/internal/core"
-	"ime-pilot/internal/takeover"
+	"ime-pilot/internal/schemes/verification"
 )
 
-func testServer(t *testing.T, execute func(context.Context, automation.Target, string, core.Mode) automation.ModeResult) *Server {
+func testServer(t *testing.T, execute func(context.Context, core.Target, string, core.Mode) core.ModeResult) *Server {
 	t.Helper()
 	if execute == nil {
-		execute = func(_ context.Context, _ automation.Target, _ string, mode core.Mode) automation.ModeResult {
-			return automation.ModeResult{Code: "changed", After: core.State{Mode: mode}}
+		execute = func(_ context.Context, _ core.Target, _ string, mode core.Mode) core.ModeResult {
+			return core.ModeResult{Code: "changed", After: core.State{Mode: mode}}
 		}
 	}
 	s, err := Start(context.Background(), t.TempDir(), Options{
-		Config: func() config.Config { return config.Config{Revision: 7} },
-		Capture: func(e Evidence) (automation.Target, error) {
+		Config: func() core.Config { return core.Config{Revision: 7} },
+		Capture: func(e Evidence) (core.Target, error) {
 			if e.PID != 123 || e.WindowID != "42" {
-				return automation.Target{}, core.ErrFocusChanged
+				return core.Target{}, core.ErrFocusChanged
 			}
-			return automation.Target{PID: e.PID, Window: 42, Path: "editor.exe", Valid: func() bool { return true }}, nil
+			return core.Target{PID: e.PID, Window: 42, Path: "editor.exe", Valid: func() bool { return true }}, nil
 		},
 		Execute: execute,
 	})
@@ -72,11 +70,11 @@ func (s *Server) testCall(t *testing.T, id, method string, p any) Response {
 	return response
 }
 
-func registrationParams(plugin, instance string, programs ...takeover.Program) registration {
+func registrationParams(plugin, instance string, programs ...core.Program) testRegistration {
 	if len(programs) == 0 {
-		programs = []takeover.Program{{Kind: "windows.executableName", Value: "editor.exe"}}
+		programs = []core.Program{{Kind: "windows.executableName", Value: "editor.exe"}}
 	}
-	return registration{PluginID: plugin, Name: plugin, Version: "test", InstanceID: instance, Programs: programs}
+	return testRegistration{PluginID: plugin, Name: plugin, Version: "test", InstanceID: instance, Programs: programs}
 }
 
 func connect(t *testing.T, s *Server, instance string) string {
@@ -168,10 +166,8 @@ func TestRegistrationAndLeaseSemantics(t *testing.T) {
 		t.Fatal(r)
 	}
 
-	s.mu.Lock()
-	s.sessions[b].Expires = time.Now().Add(-time.Second)
-	s.mu.Unlock()
-	// 即使尚未运行定时清理，也不能续期已经到期的会话。
+	// HTTP integration observes the public lease boundary; core owns session state.
+	time.Sleep(16 * time.Second)
 	if r := s.testCall(t, "renew-b", "renewSession", map[string]any{"sessionId": b}); r.Code != "session_expired" {
 		t.Fatal(r)
 	}
@@ -182,12 +178,12 @@ func TestRegistrationAndLeaseSemantics(t *testing.T) {
 
 func TestSwitchModesDedupAndTargetValidation(t *testing.T) {
 	var calls atomic.Int32
-	s := testServer(t, func(_ context.Context, target automation.Target, _ string, mode core.Mode) automation.ModeResult {
+	s := testServer(t, func(_ context.Context, target core.Target, _ string, mode core.Mode) core.ModeResult {
 		calls.Add(1)
 		if !target.Valid() {
 			t.Error("invalid target")
 		}
-		return automation.ModeResult{Code: "changed", After: core.State{Mode: mode}}
+		return core.ModeResult{Code: "changed", After: core.State{Mode: mode}}
 	})
 	id := connect(t, s, "instance")
 	for _, mode := range []core.Mode{core.English, core.Chinese} {
@@ -214,7 +210,7 @@ func TestSwitchModesDedupAndTargetValidation(t *testing.T) {
 		t.Fatal(r)
 	}
 
-	other := registrationParams("test.plugin", "other", takeover.Program{Kind: "windows.executableName", Value: "other.exe"})
+	other := registrationParams("test.plugin", "other", core.Program{Kind: "windows.executableName", Value: "other.exe"})
 	registered := s.testCall(t, "register-other", "registerPlugin", other)
 	otherID := registered.Data.(map[string]any)["sessionId"].(string)
 	if r := s.testCall(t, "not-owned", "setInputMode", switchParams(otherID, core.English)); r.Code != "scope_not_owned" {
@@ -229,26 +225,26 @@ func TestUnregisterCancelsInFlightAndDuplicateWaits(t *testing.T) {
 	entered := make(chan struct{})
 	var once sync.Once
 	var calls atomic.Int32
-	s := testServer(t, func(ctx context.Context, target automation.Target, _ string, _ core.Mode) automation.ModeResult {
+	s := testServer(t, func(ctx context.Context, target core.Target, _ string, _ core.Mode) core.ModeResult {
 		calls.Add(1)
 		once.Do(func() { close(entered) })
 		<-ctx.Done()
 		if target.Valid() {
 			t.Error("revoked context still valid")
 		}
-		return automation.ModeResult{Code: "focus_changed"}
+		return core.ModeResult{Code: "focus_changed"}
 	})
 	id := connect(t, s, "instance")
 	p, _ := json.Marshal(switchParams(id, core.English))
 	r := Request{RequestID: "inflight", Method: "setInputMode", Params: p}
 	done := make(chan Response, 2)
-	go func() { done <- s.dispatch(r, time.Now()) }()
+	go func() { done <- s.registry.Dispatch(r, time.Now()) }()
 	select {
 	case <-entered:
 	case <-time.After(time.Second):
 		t.Fatal("operation not started")
 	}
-	go func() { done <- s.dispatch(r, time.Now()) }()
+	go func() { done <- s.registry.Dispatch(r, time.Now()) }()
 	if r := s.testCall(t, "unregister", "unregisterPlugin", map[string]any{"sessionId": id}); r.Code != "ok" {
 		t.Fatal(r)
 	}
@@ -275,8 +271,8 @@ func TestNamePathConflictAndAtomicRegistration(t *testing.T) {
 	}
 	connect(t, s, "owner")
 	p := registrationParams("other.plugin", "other",
-		takeover.Program{Kind: "windows.executableName", Value: "unclaimed.exe"},
-		takeover.Program{Kind: "windows.executablePath", Value: exe})
+		core.Program{Kind: "windows.executableName", Value: "unclaimed.exe"},
+		core.Program{Kind: "windows.executablePath", Value: exe})
 	if r := s.testCall(t, "name-path", "registerPlugin", p); r.Code != "scope_conflict" {
 		t.Fatal(r)
 	}
@@ -311,14 +307,14 @@ func TestRPCAndSchedulerShareOwnershipWithoutRules(t *testing.T) {
 	defer cancel()
 	var applies atomic.Int32
 	var english atomic.Bool
-	cfg := config.Config{SchemaVersion: 2, Revision: 1, Rules: []config.Rule{}}
-	agent := automation.New(ctx, cfg, &sync.Mutex{}, func(target automation.Target) core.Backend {
-		return &integrationBackend{target: target, applies: &applies, english: &english}
+	cfg := core.Config{SchemaVersion: 2, Revision: 1, Rules: []core.Rule{}}
+	agent := core.NewAgent(ctx, cfg, &sync.Mutex{}, func(valid func() bool) (core.Switcher, error) {
+		return verification.New(&integrationBackend{target: core.Target{Valid: valid}, applies: &applies, english: &english}), nil
 	}, nil)
 	s, err := Start(ctx, t.TempDir(), Options{
-		Config: func() config.Config { return cfg },
-		Capture: func(e Evidence) (automation.Target, error) {
-			return automation.Target{Path: "editor.exe", PID: e.PID, Window: 42, Valid: func() bool { return true }}, nil
+		Config: func() core.Config { return cfg },
+		Capture: func(e Evidence) (core.Target, error) {
+			return core.Target{Path: "editor.exe", PID: e.PID, Window: 42, Valid: func() bool { return true }}, nil
 		},
 		Execute: agent.SubmitPlugin, Publish: agent.SetTakeovers,
 	})
@@ -345,7 +341,7 @@ func TestRPCAndSchedulerShareOwnershipWithoutRules(t *testing.T) {
 }
 
 type integrationBackend struct {
-	target  automation.Target
+	target  core.Target
 	applies *atomic.Int32
 	english *atomic.Bool
 }
@@ -371,4 +367,12 @@ func (b *integrationBackend) Apply(ctx context.Context, _ core.State, mode core.
 	b.applies.Add(1)
 	b.english.Store(mode == core.English)
 	return nil
+}
+
+type testRegistration struct {
+	PluginID   string         `json:"pluginId"`
+	Name       string         `json:"name"`
+	Version    string         `json:"version"`
+	InstanceID string         `json:"instanceId"`
+	Programs   []core.Program `json:"programs"`
 }

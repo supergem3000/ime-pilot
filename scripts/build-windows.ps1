@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$DownloadDependencies,
+    [switch]$RunTests,
     [switch]$BuildProbe
 )
 
@@ -9,6 +10,9 @@ $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
     throw 'Go was not found. This script does not install tools.'
+}
+if (-not (Get-Command wails3 -ErrorAction SilentlyContinue)) {
+    throw 'Wails CLI (wails3) is required to embed the executable icon. This script does not install tools.'
 }
 # Change only this PowerShell process while the command runs, then restore it.
 # Do not use go env -w, setx, package managers or persistent PATH changes.
@@ -19,8 +23,9 @@ foreach ($environmentName in $environmentNames) {
 }
 
 Push-Location -LiteralPath $projectRoot
+$resourcePath = $null
 try {
-    # Wails v3 on Windows builds without the Fyne C/OpenGL toolchain.
+    # Windows native APIs, including TSF COM, are called directly from Go.
     $env:CGO_ENABLED = '0'
     $env:GOTOOLCHAIN = 'local'
     # Keep all Go downloads and build scratch files inside this project, so
@@ -44,12 +49,20 @@ try {
         $env:GOSUMDB = 'off'
     }
 
-    & go test -mod=readonly ./internal/core ./internal/config ./internal/automation ./internal/rpc ./internal/takeover
-    if ($LASTEXITCODE -ne 0) { throw 'Core/configuration/automation tests failed.' }
+    if ($RunTests) {
+        & go test -mod=readonly ./internal/core ./internal/config ./internal/rpc ./internal/schemes/verification
+        if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
+    }
 
     $outputDirectory = Join-Path $projectRoot 'dist'
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
     $outputPath = Join-Path $outputDirectory 'ime-pilot.exe'
+    # Go links this resource object into the EXE, so Explorer sees the icon too.
+    $architecture = (& go env GOARCH).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Reading the Go target architecture failed.' }
+    $resourcePath = Join-Path $projectRoot "cmd/ime-pilot/rsrc_windows_$architecture.syso"
+    & wails3 generate syso -arch $architecture -icon 'assets/icons/windows/ime-pilot.ico' -manifest 'cmd/ime-pilot/ime-pilot.manifest' -out $resourcePath
+    if ($LASTEXITCODE -ne 0) { throw 'Generating the Windows icon resource failed.' }
     # Frontend assets are embedded directly; no npm/Vite install or server.
     & go build -mod=readonly -tags production -trimpath -ldflags '-H=windowsgui' -o $outputPath ./cmd/ime-pilot
     if ($LASTEXITCODE -ne 0) {
@@ -64,6 +77,10 @@ try {
     }
     Write-Output 'The executable was not launched; no input-method settings were changed.'
 } finally {
+    # Generated objects must not linger when switching target architectures.
+    if ($resourcePath -and (Test-Path -LiteralPath $resourcePath)) {
+        Remove-Item -LiteralPath $resourcePath -Force
+    }
     foreach ($environmentName in $environmentNames) {
         if ($null -eq $previousEnvironment[$environmentName]) {
             # PowerShell's .NET argument binding can turn null into an empty

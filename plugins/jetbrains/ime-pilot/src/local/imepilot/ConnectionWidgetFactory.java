@@ -12,7 +12,7 @@ public final class ConnectionWidgetFactory implements StatusBarWidgetFactory {
 
     @Override
     public String getDisplayName() {
-        return "ime-pilot connection";
+        return "IME Pilot connection";
     }
 
     @Override

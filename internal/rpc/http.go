@@ -1,12 +1,15 @@
 package rpc
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"net"
 	"net/http"
+	"regexp"
 	"time"
 )
 
@@ -74,5 +77,23 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		fail(400, "invalid_request", "JSON 请求无效")
 		return
 	}
-	write(w, 200, s.dispatch(request, received))
+	write(w, 200, s.registry.Dispatch(request, received))
+}
+
+var requestID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+func result(code, message string, data any) Response {
+	return Response{Code: code, Message: message, Data: data}
+}
+func strict(data []byte, target any) error {
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.DisallowUnknownFields()
+	if err := d.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if d.Decode(&extra) != io.EOF {
+		return errors.New("extra JSON")
+	}
+	return nil
 }

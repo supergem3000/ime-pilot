@@ -141,7 +141,7 @@ final class RpcClient implements AutoCloseable {
 
         JsonObject params = new JsonObject();
         params.addProperty("pluginId", "ime-pilot.jetbrains");
-        params.addProperty("name", "ime-pilot JetBrains");
+        params.addProperty("name", "IME Pilot JetBrains");
         params.addProperty("version", "0.4.1");
         params.addProperty("instanceId", instance);
         params.add("programs", JSON.toJsonTree(List.of(program)));

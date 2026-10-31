@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"os/user"
 
-	"golang.org/x/sys/windows"
+	native "ime-pilot/internal/platform/windows"
 )
 
-var ErrAlreadyRunning = errors.New("ime-pilot is already running; open it from the system tray")
+var ErrAlreadyRunning = errors.New("IME Pilot is already running; open it from the system tray")
 
 // AcquireInstance keeps a named object alive until close is called. The Local
 // namespace and SID separate interactive sessions and Windows user accounts.
@@ -20,19 +20,9 @@ func AcquireInstance() (close func(), err error) {
 	if err != nil {
 		return nil, fmt.Errorf("read Windows user identity: %w", err)
 	}
-	name, err := windows.UTF16PtrFromString(`Local\ime-pilot.ManualPrototype.` + currentUser.Uid)
-	if err != nil {
-		return nil, err
-	}
-	handle, err := windows.CreateMutex(nil, false, name)
-	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
-		if handle != 0 {
-			_ = windows.CloseHandle(handle)
-		}
+	release, err := native.AcquireMutex(`Local\ime-pilot.ManualPrototype.` + currentUser.Uid)
+	if errors.Is(err, native.ErrMutexExists) {
 		return nil, ErrAlreadyRunning
 	}
-	if err != nil {
-		return nil, fmt.Errorf("create single-instance mutex: %w", err)
-	}
-	return func() { _ = windows.CloseHandle(handle) }, nil
+	return release, err
 }
