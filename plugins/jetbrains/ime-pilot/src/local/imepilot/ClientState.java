@@ -6,7 +6,7 @@ import com.intellij.openapi.wm.WindowManager;
 
 public final class ClientState {
     private static volatile String summary = "未连接";
-    private static volatile String detail = "等待注册程序接管；IdeaVim 适配版本为 2.47.3";
+    private static volatile String detail = "等待注册程序接管；IdeaVim 适配版本为 2.47.3 / 2.48.0";
 
     public static String summary() {
         return summary;

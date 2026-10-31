@@ -2,6 +2,8 @@
 
 定义插件注册、接管程序和请求切换输入法的接口。
 
+Windows 和 macOS 主体均提供本接口。macOS 插件请求只校验前台应用 PID，不需要辅助功能权限；Windows 仍校验 PID 与 HWND。
+
 ## 1. 怎么连接
 
 插件读取当前用户的 runtime.json，取得端口 port 和认证令牌 token。
@@ -55,7 +57,7 @@ params 示例：
 {
   "pluginId": "ime-pilot.jetbrains",
   "name": "ime-pilot JetBrains",
-  "version": "0.3.0",
+  "version": "0.4.1",
   "instanceId": "74e872f0-ae15-4f59-9dab-155cce418d58",
   "programs": [
     {"kind": "windows.executableName", "value": "idea64.exe"}
@@ -89,7 +91,7 @@ params 为 {sessionId}。成功 code=ok，data 为 {leaseMs:15000,renewAfterMs:5
 
 ### 切换：setInputMode
 
-params 示例：
+Windows params 示例（macOS 省略 windowId）：
 
 ```json
 {
@@ -103,14 +105,14 @@ params 示例：
 ```
 
 - targetMode 只接受 english 或 chinese，不提供“反转当前状态”。
-- pid 是目标窗口所属进程，不是插件通信进程。
-- windowId 为系统窗口标识的十进制字符串，由主体按本机操作系统解析和核实。Windows 使用 HWND，macOS 使用系统窗口标识；无法可靠验证则返回 unsupported_context，不用 PID 代替窗口。
+- pid 是目标应用进程，不是独立的插件通信进程。
+- windowId 在 Windows 上必填，为 HWND 的十进制字符串。macOS 不需要该字段，旧客户端携带时忽略，主体通过 NSWorkspace 校验前台应用 PID，不区分同一进程内的窗口。
 - 每个插件实例串行发送切换请求，不积压旧事件；发送前确认任务仍有效，窗口失焦或内部状态变化后作废本地旧任务。
-- 主体核实目标在会话接管范围内、仍是精确前台窗口，并在实际执行前再次检查；从主体收到请求开始计时，排队超过 300ms 则丢弃。
+- 主体核实目标在会话接管范围内，Windows 核对前台 PID 与 HWND，macOS 核对前台应用 PID，并在实际执行前再次检查；从主体收到请求开始计时，排队超过 300ms 则丢弃。
 
-主体无法判断请求到达前已耽搁多久，也无法判断同一窗口内的插件业务状态是否变化；这些由插件在发送前检查。
+主体无法判断请求到达前已耽搁多久，也无法判断同一窗口内的插件业务状态是否变化；这些由插件在发送前检查。macOS 上请求发出后若切到同一 PID 的另一个窗口，主体仍可能执行该请求；切到其他进程则拒绝执行。
 
-主体只处理目标模式，不理解插件为何切换，不查该程序普通规则的开关或策略。全局暂停仍生效，执行方式采用主体全局输入法设置：英文优先输入法内部切换，中文切当前输入法内部中文。不支持就返回错误。
+主体只处理目标模式，不理解插件为何切换，不查该程序普通规则的开关或策略。全局暂停仍生效。Windows 控制当前输入法内部中英文；macOS 选择用户配置的中文输入源或英文键盘布局，不控制第三方输入法的内部中英文开关。不支持就返回错误。macOS 的 actualMode 表示已核实选中对应配置的系统输入源，不表示已读到输入法内部状态。
 
 成功 data 为 {targetMode,actualMode}，两者必须一致；已经符合则 code=already_selected，切换并验证符合则 code=changed。失败或跳过 data=null，message 说明原因。不把系统调用返回或输入法名称不变当作验证成功。
 
@@ -130,9 +132,9 @@ params 为 {sessionId}。成功 code=ok，data=null，重复注销也返回 ok�
 | scope_conflict / scope_unverifiable | 其他插件已接管重叠范围，或范围无法核实 |
 | registration_conflict / scope_not_owned | 重复注册内容不同，或目标不属于该会话接管范围 |
 | session_expired | sessionId 不存在或租约已到期，需要重新注册 |
-| focus_changed / unsupported_context | 目标已失焦或无法可靠识别窗口 |
+| focus_changed / unsupported_context | 目标已失焦或无法可靠识别前台目标 |
 | unsupported_mode / verification_failed | 不支持目标模式或无法确认切换结果 |
-| timeout / native_error / permission_denied | 超时、系统调用失败或权限不足 |
+| timeout / native_error | 超时或系统调用失败 |
 | invalid_request / rate_limited | 参数或调用频率不符合要求 |
 
 失败和跳过同样返回 code、data、message；未知 code 一律不当作成功。例如：

@@ -19,7 +19,7 @@ for (const button of buttons) button.addEventListener("click", async () => {
   const reply=await Call.ByName("ime-pilot/internal/desktop.InputService.Perform",button.dataset.mode);
   if(current!==generation) return;
   status.textContent=reply.message;
-  if(reply.ok){const s=reply.state;modeLabel.textContent="最近查询："+({chinese:"中文",english:"英文"}[s.Mode]??"未知");details.textContent=s.Description+"\n"+s.Details;}
+  if(reply.ok){const s=reply.state;modeLabel.textContent="最近查询："+({chinese:"中文",english:"英文"}[s.Mode]??(platform==="darwin"?"未配置的":"未知"))+(platform==="darwin"?"输入源":"模式");details.textContent=s.Description+"\n"+s.Details;}
   else {modeLabel.textContent="本次结果未确认，请重新查询。";details.textContent="没有将上一次查询结果作为本次成功状态。";}
  } catch(error){if(current===generation){status.textContent="操作失败："+String(error);modeLabel.textContent="本次结果未确认";details.textContent="";}}
  finally {busy=false;buttons.forEach(b=>b.disabled=false);}
@@ -34,6 +34,9 @@ let dirty = false;
 let editGeneration = 0;
 let saving = false;
 let plugins = [];
+let macos = {};
+let inputSources = [];
+let platform = "";
 
 function takeoverNames(rule) {
  const path = (rule.appPath || "").replaceAll("/", "\\").toLowerCase();
@@ -97,6 +100,9 @@ function drawRules() {
 }
 function markDirty(){editGeneration++;dirty=true;$("saved").textContent="有未保存的修改";}
 function displayStatus(data,force=false){
+ platform = data.platform;
+ $("macos-settings").hidden = platform !== "darwin";
+ if (platform === "darwin") $("manual-help").textContent = "先保存上方输入源设置，再点击按钮，在测试框核对实际输入。这里只确认本窗口选中的系统输入源，不读取输入法内部中英文状态。";
  plugins = data.rpc?.plugins ?? [];
  drawPlugins();
  $("config-path").textContent=data.configPath;
@@ -108,7 +114,12 @@ function displayStatus(data,force=false){
  $("pause").disabled=!!data.error || saving;
  $("config-error").textContent=data.error||data.monitorError||"";
  $("save").disabled=!!data.error || saving;
- if(force || !dirty){config=data.config;draft=structuredClone(config.rules);dirty=false;drawRules();$("saved").textContent="配置已加载";}
+ if(force || !dirty){
+  const changed = force || !config || config.revision !== data.config.revision;
+  config=data.config;draft=structuredClone(config.rules);macos=structuredClone(config.macos ?? {});dirty=false;
+  if(changed) drawSources();
+  drawRules();$("saved").textContent="配置已加载";
+ }
  else {
   drawRules();
   if(config && data.config.revision!==config.revision){$("saved").textContent="配置已在其他位置更新；请重新加载后编辑";}
@@ -136,7 +147,7 @@ $("add").onclick=()=>{
 };
 $("save").onclick=async()=>{
  if(!config||saving)return;const savedGeneration=editGeneration;saving=true;$("save").disabled=true;
- try{const data=await api("SaveConfig",{...config,rules:structuredClone(draft)});if(editGeneration===savedGeneration){displayStatus(data,true);$("saved").textContent="已保存；未被插件接管时，下次进入应用生效";}else{config=data.config;displayStatus(data);$("saved").textContent="已保存；还有新的修改尚未保存";}}
+ try{const data=await api("SaveConfig",{...config,macos:structuredClone(macos),rules:structuredClone(draft)});if(editGeneration===savedGeneration){displayStatus(data,true);$("saved").textContent="已保存；未被插件接管时，下次进入应用生效";}else{config=data.config;displayStatus(data);$("saved").textContent="已保存；还有新的修改尚未保存";}}
  catch(e){$("config-error").textContent="保存失败："+errorText(e);}
  finally{saving=false;$("save").disabled=false;$("pause").disabled=false;}
 };
@@ -151,3 +162,23 @@ Events.On("agent:changed",()=>refreshStatus());
 window.addEventListener("focus",()=>refreshStatus());
 await refreshStatus(true);
 await refreshApps();
+
+function drawSources() {
+ for (const [element, key, capability] of [["chinese-source", "chineseSourceId", "chinese"], ["english-source", "englishSourceId", "english"]]) {
+  const select = $(element);
+  select.replaceChildren(new Option("请选择输入源", ""));
+  for (const source of inputSources.filter(s => s[capability])) select.add(new Option(source.name + " — " + source.id, source.id));
+  const selected = macos[key] || "";
+  if (selected && ![...select.options].some(o => o.value === selected)) select.add(new Option("未启用或不可用 — " + selected, selected));
+  select.value = selected;
+  select.onchange = () => { macos[key] = select.value; markDirty(); };
+ }
+}
+async function refreshSources() {
+ $("refresh-sources").disabled = true;
+ try { inputSources = await api("ListInputSources"); drawSources(); $("source-status").textContent = "输入源列表已更新；修改后请点击下方保存规则。"; }
+ catch (e) { $("source-status").textContent = "读取输入源失败：" + errorText(e); }
+ finally { $("refresh-sources").disabled = false; }
+}
+$("refresh-sources").onclick = refreshSources;
+if (platform === "darwin") await refreshSources();

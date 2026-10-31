@@ -29,7 +29,7 @@ var pluginID = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 
 type Evidence struct {
 	PID      uint32 `json:"pid"`
-	WindowID string `json:"windowId"`
+	WindowID string `json:"windowId,omitempty"`
 }
 
 type Options struct {
@@ -422,15 +422,21 @@ func (s *Server) switchMode(raw []byte, client *session, received time.Time) Res
 		TargetMode core.Mode `json:"targetMode"`
 		Target     Evidence  `json:"target"`
 	}
-	if strict(raw, &p) != nil || p.Target.PID == 0 || p.Target.WindowID == "" || (p.TargetMode != core.English && p.TargetMode != core.Chinese) {
+	if strict(raw, &p) != nil || p.Target.PID == 0 || (p.TargetMode != core.English && p.TargetMode != core.Chinese) {
 		return result("invalid_request", "切换参数无效", nil)
 	}
 	if s.opts.Config().Paused {
 		return result("skipped_paused", "自动切换已暂停", nil)
 	}
 	target, err := s.opts.Capture(p.Target)
-	if err != nil || target.Valid == nil || !target.Valid() {
-		return result("unsupported_context", "无法核实前台目标窗口", nil)
+	if err != nil {
+		if errors.Is(err, core.ErrFocusChanged) {
+			return result("focus_changed", err.Error(), nil)
+		}
+		return result("unsupported_context", "无法核实前台目标："+err.Error(), nil)
+	}
+	if target.Valid == nil || !target.Valid() {
+		return result("focus_changed", "前台目标已变化", nil)
 	}
 	if !takeover.CoversIdentity(client.Programs, target.Identity()) {
 		return result("scope_not_owned", "会话未接管该程序", nil)

@@ -52,6 +52,7 @@ final class RpcClient implements AutoCloseable {
     private volatile String session;
     private volatile boolean closed;
     private volatile String stage = "idle";
+    private boolean paused;
 
     RpcClient() {
         this(discoveryPath());
@@ -104,11 +105,13 @@ final class RpcClient implements AutoCloseable {
         if (closed) {
             return;
         }
+        boolean wasConnected = isConnected();
         stage = "discovery";
         JsonObject next = readDiscovery(runtimePath);
         if (discovery == null || !next.equals(discovery)) {
             disconnect();
             discovery = next;
+            wasConnected = false;
         }
         JsonObject response;
         if (session == null) {
@@ -119,30 +122,27 @@ final class RpcClient implements AutoCloseable {
             if ("session_expired".equals(response.get("code").getAsString())) {
                 // 会话失效只重新注册，不补发之前的切换。
                 session = null;
+                wasConnected = false;
                 response = register();
             }
         }
         requireOK(response);
-        boolean paused = response.getAsJsonObject("data").get("paused").getAsBoolean();
+        boolean nextPaused = response.getAsJsonObject("data").get("paused").getAsBoolean();
         stage = "connected";
-        ClientState.set("已连接", paused ? "程序已接管；全局暂停中" : "程序已接管；聚焦及退出 Insert 时切英文");
+        if (!wasConnected || nextPaused != paused) {
+            ClientState.set("已连接", nextPaused ? "程序已接管；全局暂停中" : "程序已接管；聚焦及退出 Insert 时切英文");
+        }
+        paused = nextPaused;
     }
 
     private JsonObject register() throws Exception {
         stage = "registerPlugin";
-        String executable = ProcessHandle.current().info().command()
-                .orElseThrow(() -> new IOException("host executable unavailable"));
-        if (!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")) {
-            throw new IOException("native window adapter unavailable");
-        }
-        JsonObject program = new JsonObject();
-        program.addProperty("kind", "windows.executablePath");
-        program.addProperty("value", executable);
+        JsonObject program = NativeTarget.program();
 
         JsonObject params = new JsonObject();
         params.addProperty("pluginId", "ime-pilot.jetbrains");
         params.addProperty("name", "ime-pilot JetBrains");
-        params.addProperty("version", "0.3.0");
+        params.addProperty("version", "0.4.1");
         params.addProperty("instanceId", instance);
         params.add("programs", JSON.toJsonTree(List.of(program)));
 
@@ -158,13 +158,10 @@ final class RpcClient implements AutoCloseable {
         return params;
     }
 
-    void setInputMode(long windowId, String mode, BooleanSupplier valid) throws Exception {
+    void setInputMode(JsonObject target, String mode, BooleanSupplier valid) throws Exception {
         if (!isConnected() || !valid.getAsBoolean()) {
             return;
         }
-        JsonObject target = new JsonObject();
-        target.addProperty("pid", ProcessHandle.current().pid());
-        target.addProperty("windowId", Long.toUnsignedString(windowId));
         JsonObject params = params();
         params.addProperty("targetMode", mode);
         params.add("target", target);
@@ -228,7 +225,7 @@ final class RpcClient implements AutoCloseable {
     private static void requireOK(JsonObject response) throws IOException {
         String code = response.get("code").getAsString();
         if (!"ok".equals(code)) {
-            throw new IOException("RPC " + code);
+            throw new IOException("RPC " + code + ": " + response.get("message").getAsString());
         }
     }
 

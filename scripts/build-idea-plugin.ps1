@@ -32,7 +32,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Plugin contract tests failed.' }
 Remove-Item -LiteralPath (Join-Path $classes 'local\imepilot\ClientContractTest.class')
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($classes, (Join-Path $lib 'ime-pilot.jar'))
-$output = Join-Path $root 'dist\ime-pilot-idea-0.3.0.zip'
+$output = Join-Path $root 'dist\ime-pilot-idea-0.4.1.zip'
 if (Test-Path -LiteralPath $output) { Remove-Item -LiteralPath $output }
 [IO.Compression.ZipFile]::CreateFromDirectory($package, $output)
 Write-Output "Built: $output"

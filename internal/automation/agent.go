@@ -235,7 +235,8 @@ func (a *Agent) execute(r request) {
 	// 原生后端每次核实目标时也检查所有者，防止排队期间接管关系改变。
 	target := r.target
 	target.Valid = func() bool { return a.valid(r) }
-	result, err := core.NewController(a.factory(target)).Switch(ctx, r.mode)
+	backend := a.factory(target)
+	result, err := core.NewController(backend).Switch(ctx, r.mode)
 	r.result = result
 	if !a.valid(r) {
 		a.record(r, "skipped", "目标或配置已变化，结果不再确认")
@@ -258,7 +259,11 @@ func (a *Agent) execute(r request) {
 		return
 	}
 	if result.Changed {
-		a.record(r, "changed", "已查询确认输入法模式："+string(r.mode))
+		message := "已查询确认输入法模式：" + string(r.mode)
+		if _, ok := backend.(core.SourceSelector); ok {
+			message = "已确认系统输入源：" + result.After.Description
+		}
+		a.record(r, "changed", message)
 	} else {
 		a.record(r, "already_selected", "已是目标模式，没有重复切换")
 	}

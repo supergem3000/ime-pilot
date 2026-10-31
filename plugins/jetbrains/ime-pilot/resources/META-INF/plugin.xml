@@ -1,7 +1,7 @@
 <idea-plugin>
-  <id>local.imepilot.idea</id><name>ime-pilot</name><version>0.3.0</version><vendor>ime-pilot</vendor>
+  <id>local.imepilot.idea</id><name>ime-pilot</name><version>0.4.1</version><vendor>ime-pilot</vendor>
   <description>Takes over IDEA input-method behavior and requests English on window activation and IdeaVim Insert leave. No Vim configuration edits or text collection.</description>
-  <idea-version since-build="261" until-build="261.*"/>
+  <idea-version since-build="261" until-build="262.*"/>
   <depends>com.intellij.modules.platform</depends>
   <depends optional="true" config-file="ideavim.xml">IdeaVIM</depends>
   <extensions defaultExtensionNs="com.intellij">

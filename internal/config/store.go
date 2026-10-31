@@ -46,6 +46,12 @@ type Config struct {
 	Revision      uint64 `json:"revision"`
 	Paused        bool   `json:"paused"`
 	Rules         []Rule `json:"rules"`
+	MacOS         MacOS  `json:"macos,omitempty"`
+}
+
+type MacOS struct {
+	ChineseSourceID string `json:"chineseSourceId,omitempty"`
+	EnglishSourceID string `json:"englishSourceId,omitempty"`
 }
 
 var ErrConflict = errors.New("配置已被其他操作更新，请重新加载后保存")
@@ -101,6 +107,14 @@ func Validate(c Config) error {
 	}
 	if len(c.Rules) > 128 {
 		return errors.New("应用规则最多 128 条")
+	}
+	for _, id := range []string{c.MacOS.ChineseSourceID, c.MacOS.EnglishSourceID} {
+		if len(id) > 512 || strings.TrimSpace(id) != id || strings.ContainsRune(id, 0) {
+			return errors.New("输入源标识无效")
+		}
+	}
+	if c.MacOS.ChineseSourceID != "" && c.MacOS.ChineseSourceID == c.MacOS.EnglishSourceID {
+		return errors.New("中文和英文不能使用同一个输入源")
 	}
 	seen := map[string]bool{}
 	for _, r := range c.Rules {

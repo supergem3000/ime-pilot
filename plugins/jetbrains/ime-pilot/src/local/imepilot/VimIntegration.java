@@ -23,14 +23,14 @@ public final class VimIntegration implements Disposable {
     private VimListenersNotifier notifier;
     private ModeChangeListener listener;
 
-    // 航航
     public VimIntegration() {
         start();
     }
 
     public void start() {
         var descriptor = PluginManagerCore.getPlugin(PluginId.getId("IdeaVIM"));
-        if (descriptor == null || !"2.47.3".equals(descriptor.getVersion())) {
+        if (descriptor == null || !("2.47.3".equals(descriptor.getVersion()) || "2.48.0".equals(descriptor.getVersion()))) {
+            ClientState.set(ClientState.summary(), "IdeaVim 适配支持 2.47.3 / 2.48.0；当前仅处理窗口聚焦");
             return;
         }
         ApplicationManager.getApplication().invokeLater(this::register);

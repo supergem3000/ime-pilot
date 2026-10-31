@@ -2,13 +2,12 @@ package local.imepilot;
 
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
-import com.sun.jna.Native;
 import java.awt.AWTEvent;
 import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.event.AWTEventListener;
 import java.awt.event.WindowEvent;
-import java.util.Locale;
+import java.io.IOException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -39,8 +38,8 @@ public final class PluginService implements Disposable {
         if (disposed || started) {
             return;
         }
-        if (!System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")) {
-            ClientState.set("平台待支持", "本机窗口及输入法适配暂仅支持 Windows");
+        if (!NativeTarget.supported()) {
+            ClientState.set("平台待支持", "本机窗口及输入法适配支持 Windows 和 macOS");
             return;
         }
         started = true;
@@ -66,7 +65,7 @@ public final class PluginService implements Disposable {
             try {
                 client.heartbeat();
                 failures = 0;
-            } catch (Exception error) {
+            } catch (Exception | LinkageError error) {
                 failed(error);
             }
         }, 0, 5, TimeUnit.SECONDS);
@@ -88,17 +87,28 @@ public final class PluginService implements Disposable {
             return;
         }
         long ticket = generation.incrementAndGet();
-        long hwnd = Native.getWindowID(window);
-        latest.set(() -> {
-            try {
-                client.setInputMode(hwnd, "english", () -> !disposed && generation.get() == ticket);
-            } catch (Exception error) {
-                failed(error);
-            }
-        });
+        long created = System.nanoTime();
+        try {
+            var target = NativeTarget.target(window);
+            latest.set(() -> {
+                try {
+                    client.setInputMode(target, "english", () -> current(ticket, created));
+                } catch (Exception failure) {
+                    failed(failure);
+                }
+            });
+        } catch (IOException | RuntimeException | LinkageError error) {
+            invalidate();
+            ClientState.set("目标不可用", "无法读取原生目标：" + error.getClass().getSimpleName());
+        }
     }
 
-    private void failed(Exception error) {
+    private boolean current(long ticket, long created) {
+        return !disposed && generation.get() == ticket
+                && System.nanoTime() - created < TimeUnit.MILLISECONDS.toNanos(300);
+    }
+
+    private void failed(Throwable error) {
         String stage = client.diagnostic();
         invalidate();
         client.disconnect();
@@ -109,7 +119,7 @@ public final class PluginService implements Disposable {
             cause = cause.getCause();
         }
         ClientState.set("未连接", "阶段：" + stage + " / " + cause.getClass().getSimpleName()
-                + "；恢复后等待新事件");
+                + "：" + cause.getMessage() + "；恢复后等待新事件");
     }
 
     @Override

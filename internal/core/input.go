@@ -34,10 +34,15 @@ type State struct {
 }
 
 // Backend must reject a changed context before applying an operation.
-// It must not simulate keystrokes, change keyboard layouts, or commit text.
+// It must not simulate keystrokes or commit text. Input-source changes require
+// an explicit SourceSelector so the controller can verify the destination.
 type Backend interface {
 	Snapshot() (State, error)
 	Apply(ctx context.Context, expected State, mode Mode) error
+}
+
+type SourceSelector interface {
+	TargetSource(Mode) (string, error)
 }
 
 type Result struct {
@@ -62,7 +67,7 @@ func (c *Controller) Inspect() (State, error) {
 }
 
 // Switch requires a deadline so a non-responsive mode never causes endless
-// polling. Cancelling cannot undo an operation already accepted by Windows.
+// polling. Cancelling cannot undo an operation already accepted by the OS.
 func (c *Controller) Switch(ctx context.Context, mode Mode) (Result, error) {
 	if mode != Chinese && mode != English {
 		return Result{}, ErrInvalidMode
@@ -83,10 +88,18 @@ func (c *Controller) Switch(ctx context.Context, mode Mode) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if before.ContextID == "" || before.InputSourceID == "" || before.Mode == Unknown || before.Mode == "" {
+	expectedSource := before.InputSourceID
+	selector, selectsSource := c.backend.(SourceSelector)
+	if selectsSource {
+		expectedSource, err = selector.TargetSource(mode)
+		if err != nil {
+			return result, err
+		}
+	}
+	if before.ContextID == "" || before.InputSourceID == "" || expectedSource == "" || (!selectsSource && (before.Mode == Unknown || before.Mode == "")) {
 		return result, ErrUnsupported
 	}
-	if before.Mode == mode {
+	if before.Mode == mode && before.InputSourceID == expectedSource {
 		result.After = before
 		return result, nil
 	}
@@ -110,10 +123,10 @@ func (c *Controller) Switch(ctx context.Context, mode Mode) (Result, error) {
 		if err := ctx.Err(); err != nil {
 			return result, fmt.Errorf("%w: %w", ErrVerification, err)
 		}
-		if after.ContextID != before.ContextID || after.InputSourceID != before.InputSourceID {
+		if after.ContextID != before.ContextID || (after.InputSourceID != before.InputSourceID && after.InputSourceID != expectedSource) {
 			return result, ErrFocusChanged
 		}
-		if after.Mode == mode {
+		if after.Mode == mode && after.InputSourceID == expectedSource {
 			result.Changed = true
 			return result, nil
 		}

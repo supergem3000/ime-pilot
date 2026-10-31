@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows || darwin
 
 package desktop
 
@@ -15,7 +15,6 @@ import (
 	"ime-pilot/internal/automation"
 	"ime-pilot/internal/config"
 	"ime-pilot/internal/core"
-	winime "ime-pilot/internal/platform/windows"
 	localrpc "ime-pilot/internal/rpc"
 )
 
@@ -35,7 +34,7 @@ type InputService struct {
 	saveMu       sync.Mutex
 	monitorError string
 	monitorDone  <-chan struct{}
-	monitor      *winime.Monitor
+	monitor      *platformMonitor
 	rpcServer    *localrpc.Server
 	rpcError     string
 	changed      func()
@@ -79,7 +78,7 @@ func (s *InputService) Perform(callCtx context.Context, mode string) Reply {
 	if err := ctx.Err(); err != nil {
 		return Reply{Message: explainError(err)}
 	}
-	backend, err := winime.New(hwnd)
+	backend, err := newManualBackend(hwnd, s.store)
 	if err != nil {
 		return Reply{Message: explainError(err)}
 	}
@@ -99,8 +98,11 @@ func (s *InputService) Perform(callCtx context.Context, mode string) Reply {
 		return Reply{Message: explainError(err)}
 	}
 	message := "已是" + modeName(core.Mode(mode)) + "模式，没有重复设置。"
+	if platformName == "darwin" {
+		message = "已选中配置的" + modeName(core.Mode(mode)) + "输入源，没有重复设置。"
+	}
 	if result.Changed {
-		message = "接口已查询确认" + modeName(core.Mode(mode)) + "模式；请在测试框输入验证实际效果。"
+		message = switchMessage(core.Mode(mode))
 	}
 	return Reply{State: result.After, OK: true, Message: message}
 }
@@ -119,9 +121,10 @@ func Run() error {
 	}
 	service.store = config.Open(path)
 	cfg, _ := service.store.Snapshot()
-	service.agent = automation.New(root, cfg, &service.operation, func(t automation.Target) core.Backend { return winime.NewTarget(t) }, service.notify)
+	service.agent = automation.New(root, cfg, &service.operation, func(t automation.Target) core.Backend { return newTargetBackend(t, service.store) }, service.notify)
 	app := application.New(application.Options{
 		Name: "ime-pilot", Description: "按应用自动切换输入法英文状态", Icon: appIcon(),
+		Mac:        application.MacOptions{ActivationPolicy: application.ActivationPolicyAccessory},
 		Services:   []application.Service{application.NewService(service)},
 		Assets:     application.AssetOptions{Handler: application.BundledAssetFileServer(assets)},
 		OnShutdown: func() { stop(); service.cancelCurrent(); service.waitAutomation() },
@@ -140,7 +143,9 @@ func Run() error {
 	tray := app.SystemTray.New().SetIcon(appIcon())
 	tray.SetTooltip("ime-pilot")
 	open := func() { window.Show(); window.Focus() }
-	tray.OnClick(open)
+	if platformName == "windows" {
+		tray.OnClick(open)
+	}
 	menu := app.NewMenu()
 	menu.Add("打开 ime-pilot").OnClick(func(_ *application.Context) { open() })
 	menu.AddSeparator()
@@ -189,9 +194,9 @@ func explainError(err error) string {
 	case errors.Is(err, core.ErrFocusChanged):
 		return "已停止：ime-pilot 窗口失焦或输入上下文已变化。"
 	case errors.Is(err, core.ErrUnsupported):
-		return "当前环境暂不可控。请确认选中微软拼音；详细信息：" + err.Error()
+		return unsupportedMessage() + err.Error()
 	case errors.Is(err, core.ErrVerification):
-		return "未确认切换成功：输入法可能未响应 IMM 接口。请核对任务栏状态。"
+		return "未确认切换成功，请核对系统输入法状态。"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "操作已取消或超时，未确认切换结果。"
 	default:

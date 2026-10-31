@@ -1,24 +1,20 @@
-//go:build windows
+//go:build windows || darwin
 
 package desktop
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strconv"
 	"time"
-
-	"golang.org/x/sys/windows"
 
 	"ime-pilot/internal/automation"
 	"ime-pilot/internal/config"
-	winime "ime-pilot/internal/platform/windows"
 	localrpc "ime-pilot/internal/rpc"
 )
 
 type Dashboard struct {
+	Platform     string             `json:"platform"`
 	Config       config.Config      `json:"config"`
 	ConfigPath   string             `json:"configPath"`
 	Error        string             `json:"error"`
@@ -30,7 +26,7 @@ type Dashboard struct {
 
 func (s *InputService) GetStatus() Dashboard {
 	c, err := s.store.Snapshot()
-	d := Dashboard{Config: c, ConfigPath: s.store.Path()}
+	d := Dashboard{Platform: platformName, Config: c, ConfigPath: s.store.Path()}
 	if err != nil {
 		d.Error = err.Error()
 	}
@@ -47,21 +43,12 @@ func (s *InputService) GetStatus() Dashboard {
 	}
 	return d
 }
-func (s *InputService) ListApps() ([]winime.App, error) { return winime.RunningApps() }
+func (s *InputService) ListApps() ([]platformApp, error) { return runningApps() }
 func (s *InputService) SaveConfig(c config.Config) (Dashboard, error) {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
-	// Do not accept arbitrary targets that are not real executable files.
-	for _, r := range c.Rules {
-		if r.Enabled {
-			if r.BundleID != "" {
-				return s.GetStatus(), fmt.Errorf("Windows 无法启用 macOS 应用规则：%s", r.Name)
-			}
-			info, err := os.Stat(r.AppPath)
-			if err != nil || !info.Mode().IsRegular() {
-				return s.GetStatus(), fmt.Errorf("应用文件不可用：%s", r.AppPath)
-			}
-		}
+	if err := validatePlatformConfig(c); err != nil {
+		return s.GetStatus(), err
 	}
 	next, err := s.store.Save(c)
 	if err != nil {
@@ -93,7 +80,7 @@ func (s *InputService) notify() {
 	}
 }
 func (s *InputService) startAutomation(ctx context.Context) {
-	monitor, err := winime.StartMonitor(ctx, s.agent.Invalidate)
+	monitor, err := startMonitor(ctx, s.agent.Invalidate)
 	if err != nil {
 		s.stateMu.Lock()
 		s.monitorError = err.Error()
@@ -107,7 +94,7 @@ func (s *InputService) startAutomation(ctx context.Context) {
 	go func() {
 		first := true
 		for event := range monitor.Events {
-			target, err := winime.ResolveEvent(event)
+			target, err := resolveEvent(event)
 			if err != nil {
 				target.Path = ""
 			}
@@ -122,13 +109,6 @@ func (s *InputService) startAutomation(ctx context.Context) {
 			s.notify()
 		}
 	}()
-}
-func configPath() (string, error) {
-	base, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, 0)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "ime-pilot", "config.json"), nil
 }
 
 // Shutdown is bounded; an already submitted native message cannot be undone.
@@ -162,17 +142,13 @@ func (s *InputService) startRPC(ctx context.Context) {
 	server, err := localrpc.Start(ctx, filepath.Dir(s.store.Path()), localrpc.Options{
 		Config: func() config.Config { c, _ := s.store.Snapshot(); return c },
 		Capture: func(e localrpc.Evidence) (automation.Target, error) {
-			hwnd, err := strconv.ParseUint(e.WindowID, 10, 64)
-			if err != nil {
-				return automation.Target{}, err
-			}
 			s.stateMu.Lock()
 			monitor := s.monitor
 			s.stateMu.Unlock()
 			if monitor == nil {
 				return automation.Target{}, fmt.Errorf("foreground monitor unavailable")
 			}
-			target, _, err := monitor.CaptureBinding(e.PID, uintptr(hwnd))
+			target, _, err := captureBinding(monitor, e)
 			return target, err
 		},
 		Execute: s.agent.SubmitPlugin, Publish: s.agent.SetTakeovers, Changed: s.notify,
